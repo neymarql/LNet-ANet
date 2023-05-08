@@ -2,180 +2,154 @@
 # 时间：2022/9/1 23:10
 
 
-import torch.nn as nn
-from sklearn.svm import LinearSVC
-import torch.nn.functional as F
-import torchvision.models as models
-import torch
 import numpy as np
-from torch.autograd import Variable
-import torch.utils.model_zoo as model_zoo
-import os
-from PIL import Image
-from torch.utils import data
-import time
-import csv
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import VGG16, ResNet50
+from sklearn.svm import SVC
+import tensorflow_probability as tfp
+
+# 加载并预处理数据集
+train_dir = '/data1/CelebA/train'
+val_dir = '/data1/CelebA/val'
+test_dir = '/data1/CelebA/test'
+
+# 数据增强
+train_datagen = ImageDataGenerator(
+    rescale=1./255,
+    rotation_range=10,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
+    shear_range=0.1,
+    zoom_range=0.1,
+    horizontal_flip=True,
+    fill_mode='nearest')
+
+val_datagen = ImageDataGenerator(rescale=1./255)
+test_datagen = ImageDataGenerator(rescale=1./255)
+
+train_batchsize = 128
+val_batchsize = 128
+test_batchsize = 128
+
+train_generator = train_datagen.flow_from_directory(
+    train_dir,
+    target_size=(227, 227),
+    batch_size=train_batchsize,
+    class_mode='categorical')
+
+validation_generator = val_datagen.flow_from_directory(
+    val_dir,
+    target_size=(227, 227),
+    batch_size=val_batchsize,
+    class_mode='categorical')
+
+test_generator = test_datagen.flow_from_directory(
+    test_dir,
+    target_size=(227, 227),
+    batch_size=test_batchsize,
+    class_mode='categorical')
+
+# vgg16 = VGG16(include_top=False, weights='imagenet', input_shape=(224, 224, 3))
+
+# 定义LNeto模型
+
+lneto = keras.Sequential([
+    keras.layers.Conv2D(96, (11, 11), strides=(4, 4), activation='relu', input_shape=(227, 227, 3)),
+    keras.layers.MaxPooling2D((3, 3), strides=(2, 2)),
+    keras.layers.Conv2D(256, (5, 5), strides=(1, 1), activation='relu', padding='same'),
+    keras.layers.MaxPooling2D((3, 3), strides=(2, 2)),
+    keras.layers.Conv2D(384, (3, 3), strides=(1, 1), activation='relu', padding='same'),
+    keras.layers.Conv2D(384, (3, 3), strides=(1, 1), activation='relu', padding='same'),
+    keras.layers.Conv2D(256, (3, 3), strides=(1, 1), activation='relu', padding='same')
+])
+lneto.summary()
+# 定义LNets模型
+
+lnets = keras.Sequential([
+    keras.layers.Conv2D(96, (11, 11), strides=(4, 4), activation='relu', input_shape=(227, 227, 3)),
+    keras.layers.MaxPooling2D((3, 3), strides=(2, 2)),
+    keras.layers.Conv2D(256, (5, 5), strides=(1, 1), activation='relu', padding='same'),
+    keras.layers.MaxPooling2D((3, 3), strides=(2, 2)),
+    keras.layers.Conv2D(384, (3, 3), strides=(1, 1), activation='relu', padding='same'),
+    keras.layers.Conv2D(384, (3, 3), strides=(1, 1), activation='relu', padding='same'),
+    keras.layers.Conv2D(256, (3, 3), strides=(1, 1), activation='relu', padding='same')
+])
+#resnet = ResNet50(include_top=False, weights='imagenet', input_shape=(224, 224, 3))
+lnets.summary()
+# 定义ANet模型
+anet = keras.Sequential([
+    # resnet,
+    keras.layers.Conv2D(20, (4, 4), activation='relu', input_shape=(227, 227, 3)),
+    keras.layers.MaxPooling2D((2, 2)),
+    keras.layers.Conv2D(40, (3, 3), activation='relu'),
+    keras.layers.MaxPooling2D((2, 2)),
+    keras.layers.Conv2D(60, (3, 3), activation='relu'),
+    keras.layers.MaxPooling2D((2, 2)),
+    keras.layers.Conv2D(80, (2, 2), activation='relu'),
+    keras.layers.Flatten(),
+    keras.layers.Dense(512, activation='relu'),
+    keras.layers.Dense(40, activation='sigmoid')
+])
+
+anet.summary()
 
 
-class LNeto(nn.module):
-    def __init__(self, num_class=1000):
-        super(LNeto, self).__init__()
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=96, kernel_size=11, stride=4),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(96, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.layer2 = nn.Sequential(
-            nn.Conv2d(in_channels=96, out_channels=256, kernel_size=5, padding=2),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.layer3 = nn.Sequential(
-            nn.Conv2d(in_channels=256, out_channels=384, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
-        self.layer4 = nn.Sequential(
-            nn.Conv2d(in_channels=384, out_channels=384, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
-        self.layer5 = nn.Sequential(
-            nn.Conv2d(in_channels=384, out_channels=256, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.downsample = nn.Sequential(
-            nn.Conv2d(in_channels=256, out_channels=3, kernel_size=1, padding=1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(3, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-        )
+# 将LNeto和LNets组合在一起
+model_input = keras.layers.Input(shape=(227, 227, 3))
+lneto_output = lneto(model_input)
+attention_map1 = tf.reduce_mean(lneto_output, axis=-1)
 
-    def forward(self, x):
-        identity = x
-        out = self.downsample(self.layer5(self.layer4(self.layer3(self.layer2(self.layer1(x))))))
-        out += identity
-        return out
+# 对注意力图进行阈值化并提取前10%的区域
+threshold = tfp.stats.percentile(attention_map1, 90.0)
+mask = tf.greater(attention_map1, threshold)
+indices = tf.where(mask)
+xmin = tf.reduce_min(indices[:, 0])
+ymin = tf.reduce_min(indices[:, 1])
+xmax = tf.reduce_max(indices[:, 0])
+ymax = tf.reduce_max(indices[:, 1])
+offset_height = tf.cast(xmin, tf.int32)
+offset_width = tf.cast( ymin, tf.int32)
+target_height = tf.cast(xmax-xmin, tf.int32)
+target_width = tf.cast(ymax-ymin, tf.int32)
+# 裁剪输入图像的相应区域并传递到LNets模型中
+cropped_input = tf.image.crop_to_bounding_box(model_input, offset_height, offset_width, target_height, target_width)
+cropped_input = tf.keras.layers.experimental.preprocessing.Resizing(227, 227)(cropped_input)
+lnets_output = lnets(cropped_input)
+attention_map2 = tf.reduce_mean(lneto_output, axis=-1)
 
+# 对注意力图进行阈值化并提取前10%的区域
+threshold = tfp.stats.percentile(attention_map2, 90.0)
+mask = tf.greater(attention_map2, threshold)
+indices = tf.where(mask)
+xmin = tf.reduce_min(indices[:, 0])
+ymin = tf.reduce_min(indices[:, 1])
+xmax = tf.reduce_max(indices[:, 0])
+ymax = tf.reduce_max(indices[:, 1])
+offset_height = tf.cast(xmin, tf.int32)
+offset_width = tf.cast( ymin, tf.int32)
+target_height = tf.cast(xmax-xmin, tf.int32)
+target_width = tf.cast(ymax-ymin, tf.int32)
+# 裁剪输入图像的相应区域并传递到LNets模型中
+cropped_input = tf.image.crop_to_bounding_box(model_input, offset_height, offset_width, target_height, target_width)
+cropped_input = tf.keras.layers.experimental.preprocessing.Resizing(227, 227)(cropped_input)
+anet_output = anet(cropped_input)
+# 构建整个模型3
+model = keras.Model(inputs=model_input, outputs=anet_output)
+model.summary()
+"""for layer in vgg16.layers:
+    layer.trainable = False
+for layer in .layers:
+    layer.trainable = False"""
+model.compile(optimizer='sgd', loss='categorical_crossentropy', metrics=['accuracy'])
 
-class LNets(nn.module):
-    def __init__(self):
-        super(LNets, self).__init__()
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=96, kernel_size=11, stride=4),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(96, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.layer2 = nn.Sequential(
-            nn.Conv2d(in_channels=96, out_channels=256, kernel_size=5, padding=2),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.layer3 = nn.Sequential(
-            nn.Conv2d(in_channels=256, out_channels=384, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
-        self.layer4 = nn.Sequential(
-            nn.Conv2d(in_channels=384, out_channels=384, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
-        )
-        self.layer5 = nn.Sequential(
-            nn.Conv2d(in_channels=384, out_channels=256, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.downsample = nn.Sequential(
-            nn.Conv2d(in_channels=256, out_channels=3, kernel_size=1, padding=1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(3, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-        )
+history = model.fit(train_generator,
+                    steps_per_epoch=train_generator.samples/train_generator.batch_size,
+                    epochs=10,
+                    validation_data=validation_generator,
+                    validation_steps=validation_generator.samples/validation_generator.batch_size)
 
-    def forward(self, x):
-        identity = x
-        out = self.downsample(self.layer5(self.layer4(self.layer3(self.layer2(self.layer1(x))))))
-        out += identity
-        return out
+test_loss, test_acc = model.evaluate(test_generator, steps=test_generator.samples/test_generator.batch_size)
+print('Test accuracy:', test_acc)
 
-
-class ANet(nn.module):
-    def __init__(self, num_class=1000):
-        super(ANet, self).__init__()
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=20, kernel_size=2, stride=1, padding=1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(20, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.layer2 = nn.Sequential(
-            nn.Conv2d(in_channels=20, out_channels=40, kernel_size=2, stride=1, padding=0),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(40, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.layer3 = nn.Sequential(
-            nn.Conv2d(in_channels=40, out_channels=60, kernel_size=3, stride=3, padding=3),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(60, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        )
-        self.layer4 = nn.Sequential(
-            nn.Conv2d(in_channels=60, out_channels=80, kernel_size=3, stride=3, padding=3),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(80, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-        )
-        self.layer5 = nn.Sequential(
-            nn.Linear(80, num_class)
-        )
-
-    def forward(self, x):
-        out = self.layer4(self.layer3(self.layer2(self.layer1(x))))
-        out = out.view(80, -1)
-        out = self.layer5(out)
-        return out
-
-
-class Dataset_Csv(data.Dataset):
-    """Characterizes a dataset for PyTorch"""
-
-    def __init__(self, folders, labels, transform=None):
-        """Initialization"""
-        # self.data_path = data_path
-        self.labels = labels
-        self.folders = folders
-        self.transform = transform
-
-    def __len__(self):
-        """Denotes the total number of samples"""
-        return len(self.folders)
-
-    def read_images(self, path, use_transform):
-        image = Image.open(path)
-        if use_transform is not None:
-            image = use_transform(image)
-        return image
-
-    def __getitem__(self, index):
-        """Generates one sample of data"""
-        # Select sample
-        folder = self.folders[index]
-
-        # Load data
-        X = self.read_images(folder, self.transform)  # (input) spatial images
-        y = torch.LongTensor([self.labels[index]])  # (labels) LongTensor are for int64 instead of FloatTensor
-
-        # print(X.shape)
-        return X, y
-
-
-def make_weights_for_balanced_classes(train_dataset, stage='train'):
-    targets = []
-
-    targets = torch.tensor(train_dataset)
-
-    class_sample_count = torch.tensor(
-        [(targets == t).sum() for t in torch.unique(targets, sorted=True)])
-    weight = 1. / class_sample_count.float()
-    samples_weight = torch.tensor([weight[t] for t in targets])
-    return samples_weight
